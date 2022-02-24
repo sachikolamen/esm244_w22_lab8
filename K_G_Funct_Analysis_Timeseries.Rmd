@@ -1,0 +1,140 @@
+---
+title: 'Lab 8: K and G function analysis and Timeseries'
+author: "Sachiko Lamen"
+date: "2/24/2022"
+output: html_document
+---
+
+```{r setup, include= TRUE, messages = FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(spatstat) # spatial statistics
+library(maptools) 
+library(raster)
+library(tidyverse) # load this after raster packages because whichever package is attached last will dicate which version takes precedent. 
+library(here)
+library(sf)
+library(tmap)
+```
+
+```{r}
+voles <- read_sf(dsn = here('redtreevoledata'), 
+                 layer = 'ds033') %>%  # look in the redtreevoledata folder and look for the spatial data related to ds033 
+  janitor::clean_names() %>%
+  select(county) %>%
+  filter(county == 'HUM') %>% # want to put it into UTM Zone 10 (coordinate system)
+  st_transform(crs = 32610)
+
+plot(voles)
+
+humboldt <- read_sf(dsn = 'redtreevoledata', 
+                    layer = 'california_county_shape_file') %>%
+  janitor::clean_names() %>% # use st_crs() to view CRS, we see that the coordinate system is NA -- this is because we dont have a .prj file in the data. But we know that we need WGS 84 so well assign the coordinate
+  filter(name == 'Humboldt') %>%
+  select(name) %>%
+  st_set_crs(4326) %>% # this is different than st_transform() because we are SETTING the CRS, not transforming it from one to another
+  st_transform(32610)# convert into meters of UTM
+```
+
+Now that both datasets are in the same CRS we can plot
+
+```{r}
+ggplot() +
+  geom_sf(data = humboldt,
+        color = 'darkorchid',
+        fill = 'darkorchid4',
+        size = 1) +
+  geom_sf(data = voles,
+          color = 'orange',
+          alpha = 0.7,
+          size = 2) +
+  theme_minimal() # remember that order of plots creates layer order (bottom first)
+```
+
+```{r}
+voles_sp <- as(voles, 'Spatial') # reframe voles sf object as spatial object
+voles_ppp <- as(voles_sp, 'ppp') # turn spatial object into ppp object (point pattern -- what spatial statistics package works with 'spatstat')
+
+humboldt_sp <- as(humboldt, 'Spatial')
+humboldt_win <- as(humboldt_sp, 'owin')
+
+# now we can combine the ppp and window
+
+voles_full <- ppp(voles_ppp$x, voles_ppp$y, window = humboldt_win) # x = x coorinates for all voles data
+
+plot(voles_full)
+```
+
+### Make a kernel density plot (K plot)
+
+```{r}
+voles_density <- density(voles_full, sigma = 1000) # sigma = 1000 gives a normal curve around the exact location with a std deviation of 1000 meters around it
+
+plot(voles_density)
+
+# little dots of different colors are different observations... we are taking each point and giving it a distribution (sort of like probability around the observation) 
+```
+
+```{r}
+vole_raster <- raster(voles_density) # convert the density into a raster -- a grid \
+
+# need to add CRS info tho because it got lost in the converstion
+crs(vole_raster) <- crs(voles) # set from original voles data
+
+tmap_mode('view')
+
+tm_shape(vole_raster) +
+  tm_raster(midpoint = NA,
+            palette = 'Reds',
+            legend.show = FALSE)
+```
+
+
+## NEAREST NEIGHBOR (G FUNCTION)
+
+```{r}
+r_vec <- seq(0, 10000, by = 100) # make vector containing values from 0 - 10,000 that will be used to compare neighbors -- start with 0 and go out 100 meters at a time up to 10,000
+
+gfunction <- envelope(voles_full, fun = Gest, r = r_vec, nsim = 100, nrank = 2) # nsim = simulate 100 times 
+
+# looking at data table we see the 95 percent confidence interval between low and high
+
+gfunction_long <- gfunction %>%
+  as.data.frame() %>%
+  pivot_longer(cols = obs:hi, names_to = 'model', values_to = 'g_val')
+
+ggplot(data = gfunction_long, aes(x = r, y = g_val, group = model)) +
+  geom_line(aes(color = model))
+
+# purple = theoretical predition for total CSR
+# green = low
+# red = high
+# blue = observed value set
+# so we see that there are clusters!!
+```
+
+```{r}
+# With K or L funciton, we are comparing concentric circles of every single point. Wow hella computer power, so use less simulations because it will take way longer. 
+# make window bigger in order to account for how far away other voles might be
+r_Vec2 <- seq(0, 100000, by = 5000)
+lfunction <- envelope(voles_full, fun = Lest, r = r_Vec2, nsim = 10, rank = 2, global = TRUE)
+
+lfunction_long <- lfunction %>%
+  as.data.frame() %>%
+  pivot_longer(cols = obs:hi, names_to = 'model', values_to = 'l_val')
+
+ggplot(data = lfunction_long, aes(x = r, y = l_val, color = model)) +
+  geom_line()
+```
+
+
+
+
+
+
+
+
+
+
+
+
